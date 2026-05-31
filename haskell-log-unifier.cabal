@@ -1,0 +1,30 @@
+cabal-version:      2.4
+name:               haskell-log-unifier
+version:            0.1.0.0
+synopsis:           Log unifier with DSL for parsing and transforming logs
+description:        A log unifier that parses multiple log formats (Nginx, Apache, custom) and transforms them into a unified format using a DSL.
+license:            MIT
+author:             Your Name
+maintainer:         your.email@example.com
+category:           Language
+build-type:         Simple
+
+executable haskell-log-unifier
+    main-is:          Main.hs
+    other-modules:
+        AST
+        Parser
+        Rule
+        Transformer
+
+    build-depends:    base
+                    , megaparsec ^>=9.0
+                    , text
+                    , bytestring
+                    , time
+                    , containers
+                    , parser-combinators
+    hs-source-dirs:   src
+                    , .
+    default-language: Haskell2010
+    ghc-options:      -Wall
