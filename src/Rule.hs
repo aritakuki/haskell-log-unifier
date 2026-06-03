@@ -1,6 +1,5 @@
 module Rule where
 
-import AST (LogSource(..))
 import Data.Void (Void)
 import Text.Megaparsec
 import Text.Megaparsec.Char
@@ -15,11 +14,11 @@ type RuleParser = Parsec Void String
 data Rule = Rule
   { ruleName :: String
   , rulePattern :: String
-  , ruleSource :: LogSource
+  , ruleTransform :: String
   } deriving (Show, Eq)
 
 -- ルール定義パーサー
--- 例: rule "nginx" { pattern: "IP TIMESTAMP METHOD PATH STATUS" }
+-- 例: rule "auth_error" { pattern: "BAD USERNAME FAILURE" transform: { message: "AUTH ERROR" } }
 parseRule :: RuleParser Rule
 parseRule = do
   _ <- string "rule"
@@ -32,8 +31,18 @@ parseRule = do
   _ <- space
   pattern <- quotedString
   _ <- space
+  _ <- string "transform:"
+  _ <- space
+  _ <- char '{'
+  _ <- space
+  _ <- string "message:"
+  _ <- space
+  transform <- quotedString
+  _ <- space
   _ <- char '}'
-  return $ Rule name pattern Nginx  -- TODO: ソースをパース
+  _ <- space
+  _ <- char '}'
+  return $ Rule name pattern transform
 
 -- 引用符で囲まれた文字列
 quotedString :: RuleParser String

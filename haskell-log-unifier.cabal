@@ -24,6 +24,7 @@ executable haskell-log-unifier
                     , time
                     , containers
                     , parser-combinators
+                    , ansi-terminal
     hs-source-dirs:   src
                     , .
     default-language: Haskell2010

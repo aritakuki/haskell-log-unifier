@@ -1,11 +1,9 @@
 module Parser where
 
-import AST (LogEntry(..), LogSource(..))
 import Data.Time (UTCTime, defaultTimeLocale, parseTimeM)
 import Data.Void (Void)
 import Text.Megaparsec
 import Text.Megaparsec.Char
-import qualified Text.Megaparsec.Char.Lexer as L
 
 -- ======================
 -- ログパーサー（megaparsec）
@@ -13,54 +11,8 @@ import qualified Text.Megaparsec.Char.Lexer as L
 
 type Parser = Parsec Void String
 
--- Nginxログパーサー
--- 例: 192.168.1.1 - - [31/May/2024:10:00:00] GET /api/users 200
-parseNginxLog :: Parser LogEntry
-parseNginxLog = do
-  ipAddr <- ipAddress
-  _ <- space
-  _ <- string "-"
-  _ <- space
-  _ <- string "-"
-  _ <- space
-  ts <- parseTimestamp
-  _ <- space
-  httpMethod <- parseMethod
-  _ <- space
-  reqPath <- parsePath
-  _ <- space
-  statusCode <- parseStatus
-  return $ LogEntry ts ipAddr httpMethod reqPath statusCode Nginx
-
--- Apacheログパーサー
--- 例: [31/May/2024:10:00:00] 192.168.1.1 GET /api/users 200
-parseApacheLog :: Parser LogEntry
-parseApacheLog = do
-  ts <- parseTimestamp
-  _ <- space
-  ipAddr <- ipAddress
-  _ <- space
-  httpMethod <- parseMethod
-  _ <- space
-  reqPath <- parsePath
-  _ <- space
-  statusCode <- parseStatus
-  return $ LogEntry ts ipAddr httpMethod reqPath statusCode Apache
-
--- IPアドレスパーサー
-ipAddress :: Parser String
-ipAddress = do
-  a <- L.decimal :: Parser Integer
-  _ <- char '.'
-  b <- L.decimal :: Parser Integer
-  _ <- char '.'
-  c <- L.decimal :: Parser Integer
-  _ <- char '.'
-  d <- L.decimal :: Parser Integer
-  return $ concat [show a, ".", show b, ".", show c, ".", show d]
-
 -- タイムスタンプパーサー
--- 例: [31/May/2024:10:00:00]
+-- 例: [31/May/2024:10:00:00] または 2026/05/30 13:43
 parseTimestamp :: Parser UTCTime
 parseTimestamp = do
   _ <- char '['
@@ -70,25 +22,28 @@ parseTimestamp = do
     Just ts -> return ts
     Nothing -> fail $ "Invalid timestamp: " ++ tsStr
 
--- メソッドパーサー
-parseMethod :: Parser String
-parseMethod = string "GET" <|> string "POST" <|> string "PUT" <|> string "DELETE"
-
--- パスパーサー
-parsePath :: Parser String
-parsePath = do
+-- ISO形式タイムスタンプパーサー
+-- 例: 2026/05/30 13:43
+parseISOTimestamp :: Parser UTCTime
+parseISOTimestamp = do
+  yearStr <- count 4 digitChar
   _ <- char '/'
-  reqPath <- many (noneOf " ")
-  return $ "/" ++ reqPath
+  monthStr <- count 2 digitChar
+  _ <- char '/'
+  dayStr <- count 2 digitChar
+  _ <- space
+  hourStr <- count 2 digitChar
+  _ <- char ':'
+  minuteStr <- count 2 digitChar
+  let tsStr = yearStr ++ "/" ++ monthStr ++ "/" ++ dayStr ++ " " ++ hourStr ++ ":" ++ minuteStr
+  case parseTimeM True defaultTimeLocale "%Y/%m/%d %H:%M" tsStr of
+    Just ts -> return ts
+    Nothing -> fail $ "Invalid timestamp: " ++ tsStr
 
--- ステータスコードパーサー
-parseStatus :: Parser Int
-parseStatus = L.decimal
-
--- ログパース（自動判定）
-parseLog :: String -> Either String LogEntry
-parseLog input = case parse parseNginxLog "" input of
-  Right entry -> Right entry
-  Left _ -> case parse parseApacheLog "" input of
-    Right entry -> Right entry
+-- ログパース（タイムスタンプ抽出）
+parseLog :: String -> Either String (UTCTime, String)
+parseLog input = case parse (skipMany (noneOf "[") *> try parseTimestamp) "" input of
+  Right ts -> Right (ts, input)
+  Left _ -> case parse (skipMany (noneOf "0123456789") *> try parseISOTimestamp) "" input of
+    Right ts -> Right (ts, input)
     Left err -> Left $ "Parse error: " ++ show err
