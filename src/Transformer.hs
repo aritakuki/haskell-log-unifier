@@ -52,7 +52,11 @@ sortLogEntries entries =
     hasTimestamp e = case timestamp e of
       Just _ -> True
       Nothing -> False
-    sortByTimestamp = sortBy (\e1 e2 -> compare (timestamp e1) (timestamp e2))
+    sortByTimestamp = sortBy (\e1 e2 -> case (timestamp e1, timestamp e2) of
+      (Just t1, Just t2) -> compare t1 t2
+      (Just _, Nothing) -> LT
+      (Nothing, Just _) -> GT
+      (Nothing, Nothing) -> EQ)
 
 -- ルールを適用
 applyRule :: Rule -> LogEntry -> LogEntry
