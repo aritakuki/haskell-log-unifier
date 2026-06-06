@@ -1,0 +1,4 @@
+[31/May/2024:10:00:45] high latency detected in user service
+[31/May/2024:10:00:50] high latency detected in order service
+[31/May/2024:10:00:55] normal operation
+[31/May/2024:10:01:00] high latency detected in product service

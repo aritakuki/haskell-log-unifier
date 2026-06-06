@@ -1,7 +1,7 @@
 module Transformer where
 
 import AST (LogEntry(..))
-import Data.List (sortBy)
+import Data.List (sortBy, isInfixOf)
 import Parser (parseLog)
 import Rule (Rule(..))
 import System.Console.ANSI (Color(..), ConsoleLayer(..), ColorIntensity(..), SGR(..), setSGRCode)
@@ -72,4 +72,3 @@ applyRules rules entry = case rules of
     else applyRules rest entry
   where
     contains haystack needle = needle `isInfixOf` haystack
-    isInfixOf needle haystack = needle `elem` (words haystack)

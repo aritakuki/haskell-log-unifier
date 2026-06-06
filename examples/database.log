@@ -1,0 +1,4 @@
+[31/May/2024:10:00:05] ERROR: database connection failed
+[31/May/2024:10:00:10] ERROR: database query timeout
+[31/May/2024:10:00:15] INFO: database connection restored
+[31/May/2024:10:00:20] ERROR: database deadlock detected

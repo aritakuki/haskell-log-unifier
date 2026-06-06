@@ -42,6 +42,7 @@ parseRule = do
   _ <- char '}'
   _ <- space
   _ <- char '}'
+  _ <- space
   return $ Rule name pattern transform
 
 -- 引用符で囲まれた文字列
@@ -54,6 +55,6 @@ quotedString = do
 
 -- ルールファイルパース
 parseRules :: String -> Either String [Rule]
-parseRules input = case parse parseRule "" input of
-  Right rule -> Right [rule]
+parseRules input = case parse (many parseRule) "" input of
+  Right rules -> Right rules
   Left err -> Left $ "Parse error: " ++ show err
