@@ -47,12 +47,14 @@ main = do
             then do
               files <- listDirectory logsPath
               let logFiles = filter (\f -> ".log" `isSuffixOf` f) files
-              allLogs <- mapM (\f -> readFile (logsPath ++ "/" ++ f)) logFiles
-              let logLines = concatMap lines allLogs
-              let results = transformLogs logsPath logLines
+              resultsList <- mapM (\f -> do
+                content <- readFile (logsPath ++ "/" ++ f)
+                return $ transformLogs f (lines content)
+                ) logFiles
+              let results = concat resultsList
               let successful = filterSuccessful results
               let sorted = sortLogEntries successful
-              let withRules = map (applyRules rules) sorted
+              let withRules = applyRules rules sorted
               mapM_ (putStrLn . displayLogEntry) withRules
             else do
               logsContent <- readFile logsPath
@@ -60,7 +62,7 @@ main = do
               let results = transformLogs logsPath logLines
               let successful = filterSuccessful results
               let sorted = sortLogEntries successful
-              let withRules = map (applyRules rules) sorted
+              let withRules = applyRules rules sorted
               mapM_ (putStrLn . displayLogEntry) withRules
     ["--rules", rulesFile, "--services", services, "--time", timeRange, "--logs", logsPath] -> do
       rulesContent <- readFile rulesFile
@@ -76,13 +78,15 @@ main = do
                   files <- listDirectory logsPath
                   let serviceList = splitOn "," services
                   let logFiles = filter (\f -> ".log" `isSuffixOf` f && any (\s -> s `isPrefixOf` f) serviceList) files
-                  allLogs <- mapM (\f -> readFile (logsPath ++ "/" ++ f)) logFiles
-                  let logLines = concatMap lines allLogs
-                  let results = transformLogs logsPath logLines
+                  resultsList <- mapM (\f -> do
+                    content <- readFile (logsPath ++ "/" ++ f)
+                    return $ transformLogs f (lines content)
+                    ) logFiles
+                  let results = concat resultsList
                   let successful = filterSuccessful results
                   let sorted = sortLogEntries successful
                   let filtered = filter (isInTimeRange (startTime, endTime)) sorted
-                  let withRules = map (applyRules rules) filtered
+                  let withRules = applyRules rules filtered
                   mapM_ (putStrLn . displayLogEntry) withRules
                 else do
                   logsContent <- readFile logsPath
@@ -91,8 +95,9 @@ main = do
                   let successful = filterSuccessful results
                   let sorted = sortLogEntries successful
                   let filtered = filter (isInTimeRange (startTime, endTime)) sorted
-                  let withRules = map (applyRules rules) filtered
+                  let withRules = applyRules rules filtered
                   mapM_ (putStrLn . displayLogEntry) withRules
     _ -> do
       putStrLn "Usage: log-unifier --rules <rules.dsl> --logs <logs.txt or logs directory>"
       putStrLn "       log-unifier --rules <rules.dsl> --services nginx,apache --time \"2026/05/30 13:00-14:00\" --logs ./logs"
+

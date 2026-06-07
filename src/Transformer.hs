@@ -1,11 +1,12 @@
 module Transformer where
 
 import AST (LogEntry(..))
-import Data.List (sortBy)
+import Data.List (sortBy, isInfixOf)
 import Parser (parseLog)
-import Rule (Rule(..))
+import Rule (Rule(..), EventCondition(..))
 import System.Console.ANSI (Color(..), ConsoleLayer(..), ColorIntensity(..), SGR(..), setSGRCode)
 import Text.Regex.TDFA ((=~))
+import Data.Time (diffUTCTime, NominalDiffTime)
 
 -- ANSIエスケープシーケンス
 gray :: String -> String
@@ -72,17 +73,59 @@ replacePlaceholders ('$':d:xs) submatches
          else '$' : d : replacePlaceholders xs submatches
 replacePlaceholders (x:xs) submatches = x : replacePlaceholders xs submatches
 
--- ルールを適用（パターンマッチ・正規表現対応）
-applyRules :: [Rule] -> LogEntry -> LogEntry
-applyRules rules entry = case rules of
-  [] -> entry
-  (rule:rest) ->
-    let (_, matched, _, submatches) = raw entry =~ rulePattern rule :: (String, String, String, [String])
-    in if not (null matched)
-       then
-         let transformedMsg = replacePlaceholders (ruleTransform rule) submatches
-         in entry { transformed = Just transformedMsg }
-       else
-         applyRules rest entry
+-- ログイベントの条件判定
+matchEvent :: EventCondition -> LogEntry -> Bool
+matchEvent (EventCondition src pat) entry =
+  (src `isInfixOf` source entry) &&
+  let (_, matched, _, _) = raw entry =~ pat :: (String, String, String, [String])
+  in not (null matched)
+
+-- 各ログエントリーに対して過去のログエントリーをペアにする（時系列順の走査用）
+-- 例: [1,2,3] -> [(1, []), (2, [1]), (3, [2,1])]
+zipWithPast :: [a] -> [(a, [a])]
+zipWithPast xs = zipWithPastHelper [] xs
+  where
+    zipWithPastHelper _ [] = []
+    zipWithPastHelper acc (y:ys) = (y, acc) : zipWithPastHelper (y:acc) ys
+
+-- 単一ルールまたは相関ルールの適用判定
+applyRuleSingleOrCorrelate :: Rule -> LogEntry -> [LogEntry] -> Maybe LogEntry
+applyRuleSingleOrCorrelate rule entry past =
+  case rule of
+    SingleRule _ pat trans ->
+      let (_, matched, _, submatches) = raw entry =~ pat :: (String, String, String, [String])
+      in if not (null matched)
+         then Just $ entry { transformed = Just (replacePlaceholders trans submatches) }
+         else Nothing
+    CorrelateRule _ events window trans ->
+      case timestamp entry of
+        Nothing -> Nothing
+        Just ts ->
+          -- 過去の window 秒以内のログを抽出
+          let limit = fromInteger window :: NominalDiffTime
+              inWindow = takeWhile (\e -> case timestamp e of
+                                           Just t -> diffUTCTime ts t <= limit
+                                           Nothing -> False) past
+              allInWindow = entry : inWindow
+          -- window 内のログで、すべてのイベント条件が満たされているか確認
+          in if all (\ev -> any (matchEvent ev) allInWindow) events
+             then Just $ entry { transformed = Just trans }
+             else Nothing
+
+-- すべてのルールをログリスト全体に適用する
+applyRules :: [Rule] -> [LogEntry] -> [LogEntry]
+applyRules rules entries = map applyRulesForEntry (zipWithPast entries)
+  where
+    applyRulesForEntry (entry, past) = applyRulesList rules entry past
+
+    applyRulesList [] entry _ = entry
+    applyRulesList (rule:rest) entry past =
+      case transformed entry of
+        Just _ -> entry -- すでに前のルールで変換されている場合は何もしない
+        Nothing ->
+          case applyRuleSingleOrCorrelate rule entry past of
+            Just transformedEntry -> transformedEntry
+            Nothing -> applyRulesList rest entry past
+
 
 
