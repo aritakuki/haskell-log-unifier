@@ -29,8 +29,10 @@ data Rule
       { ruleName :: String
       , corrEvents :: [EventCondition]
       , corrWindow :: Integer
+      , corrOrdered :: Bool
       , ruleTransform :: String
       }
+
   | ImportRule
       { importPath :: FilePath
       }
@@ -86,6 +88,8 @@ parseCorrelateRule = label "相関ルール定義 (correlate \"...\")" $ do
   _ <- symbol "{"
   _ <- symbol "window:"
   windowVal <- lexeme L.decimal
+  _ <- symbol "ordered:"
+  orderedVal <- (symbol "true" *> return True) <|> (symbol "false" *> return False)
   _ <- symbol "events:"
   _ <- symbol "["
   events <- many parseEventCondition
@@ -96,7 +100,8 @@ parseCorrelateRule = label "相関ルール定義 (correlate \"...\")" $ do
   transform <- lexeme quotedString
   _ <- symbol "}"
   _ <- symbol "}"
-  return $ CorrelateRule name events windowVal transform
+  return $ CorrelateRule name events windowVal orderedVal transform
+
 
 parseEventCondition :: RuleParser EventCondition
 parseEventCondition = label "イベント条件 (event { ... })" $ do

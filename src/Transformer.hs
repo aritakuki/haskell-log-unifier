@@ -88,6 +88,15 @@ zipWithPast xs = zipWithPastHelper [] xs
     zipWithPastHelper _ [] = []
     zipWithPastHelper acc (y:ys) = (y, acc) : zipWithPastHelper (y:acc) ys
 
+-- イベント条件リストが、時系列順のログリストに順序を守ってマッチするか判定
+matchOrderedEvents :: [EventCondition] -> [LogEntry] -> Bool
+matchOrderedEvents [] _ = True
+matchOrderedEvents _ [] = False
+matchOrderedEvents (ev:evs) (entry:entries) =
+  if matchEvent ev entry
+    then matchOrderedEvents evs entries
+    else matchOrderedEvents (ev:evs) entries
+
 -- 単一ルールまたは相関ルールの適用判定
 applyRuleSingleOrCorrelate :: Rule -> LogEntry -> [LogEntry] -> Maybe LogEntry
 applyRuleSingleOrCorrelate rule entry past =
@@ -97,7 +106,7 @@ applyRuleSingleOrCorrelate rule entry past =
       in if not (null matched)
          then Just $ entry { transformed = Just (replacePlaceholders trans submatches) }
          else Nothing
-    CorrelateRule _ events window trans ->
+    CorrelateRule _ events window ordered trans ->
       case timestamp entry of
         Nothing -> Nothing
         Just ts ->
@@ -107,11 +116,20 @@ applyRuleSingleOrCorrelate rule entry past =
                                            Just t -> diffUTCTime ts t <= limit
                                            Nothing -> False) past
               allInWindow = entry : inWindow
-          -- window 内のログで、すべてのイベント条件が満たされているか確認
-          in if all (\ev -> any (matchEvent ev) allInWindow) events
-             then Just $ entry { transformed = Just trans }
-             else Nothing
+          in if ordered
+             then
+               -- 順序ありの場合：時系列の古い順に戻して順序判定
+               let oldToNew = reverse allInWindow
+               in if matchOrderedEvents events oldToNew
+                  then Just $ entry { transformed = Just trans }
+                  else Nothing
+             else
+               -- 順序なしの場合：すべてのイベント条件が満たされているか確認
+               if all (\ev -> any (matchEvent ev) allInWindow) events
+               then Just $ entry { transformed = Just trans }
+               else Nothing
     ImportRule _ -> Nothing
+
 
 
 -- すべてのルールをログリスト全体に適用する
