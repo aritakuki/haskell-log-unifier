@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Log Unifier - 実行可能運用ノート GUI</title>
+  <meta name="description" content="障害対応時にログ調査を行い、得られたノウハウをDSLルールとして保存・適用するログ統合・調査支援ツールのWebダッシュボード。">
+  
+  <!-- Typography & Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-area">
+        <div class="logo-icon">λ</div>
+        <div class="logo-text">
+          <h1>Haskell Log Unifier</h1>
+          <p class="tagline">「障害調査で育つ、実行可能運用ノート」</p>
+        </div>
+      </div>
+      <div class="header-status">
+        <span class="status-indicator online"></span>
+        <span class="status-text">Backend Connected</span>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="app-body">
+      <!-- Left Config Sidebar -->
+      <section class="config-panel" aria-labelledby="config-title">
+        <h2 id="config-title" class="section-title">Configuration</h2>
+        
+        <form id="unifier-form" class="config-form">
+          <!-- Rules File Selection -->
+          <div class="form-group">
+            <label for="rules-file">DSL ルールファイル (.dsl)</label>
+            <div class="rules-select-container">
+              <div class="select-wrapper">
+                <select id="rules-file" required>
+                  <option value="" disabled selected>ロード中...</option>
+                </select>
+              </div>
+              <button type="button" id="edit-rules-btn" class="secondary-btn" disabled>ルール編集</button>
+            </div>
+          </div>
+
+          <!-- Logs Source Selection -->
+          <div class="form-group">
+            <label for="logs-path">対象ログ / ディレクトリ</label>
+            <div class="select-wrapper">
+              <select id="logs-path" required>
+                <option value="" disabled selected>ロード中...</option>
+              </select>
+            </div>
+            <div class="custom-path-toggle">
+              <input type="checkbox" id="use-custom-path">
+              <label for="use-custom-path">カスタムパスを直接指定する</label>
+            </div>
+            <input type="text" id="custom-logs-path" class="hidden" placeholder="例: examples/flat_real_logs" />
+          </div>
+
+          <div class="divider"></div>
+
+          <!-- Advanced Filtering -->
+          <div class="advanced-section">
+            <div class="advanced-header">
+              <h3>詳細フィルタリング</h3>
+              <label class="switch">
+                <input type="checkbox" id="use-advanced-filter">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div id="advanced-fields" class="advanced-fields hidden">
+              <!-- Services to Filter -->
+              <div class="form-group">
+                <label for="services-list">対象サービス名 (カンマ区切り)</label>
+                <input type="text" id="services-list" placeholder="例: apache,nginx,myapp1" value="apache,nginx,myapp1">
+                <p class="field-hint">※指定サービス名で始まるログファイルを抽出します</p>
+              </div>
+
+              <!-- Time Range -->
+              <div class="form-group">
+                <label for="start-time">開始時間</label>
+                <input type="datetime-local" id="start-time" step="60">
+              </div>
+
+              <div class="form-group">
+                <label for="end-time">終了時間</label>
+                <input type="datetime-local" id="end-time" step="60">
+              </div>
+            </div>
+          </div>
+
+          <!-- Action Button -->
+          <button type="submit" id="submit-btn" class="primary-btn">
+            <span class="btn-text">ログを統合・分析</span>
+            <span class="loader hidden"></span>
+          </button>
+        </form>
+      </section>
+
+      <!-- Right Results Area -->
+      <section class="results-panel" aria-labelledby="results-title">
+        <div class="results-header">
+          <h2 id="results-title" class="section-title">Unified Timeline</h2>
+          
+          <!-- Search Bar -->
+          <div class="search-box">
+            <input type="text" id="search-input" placeholder="ログまたは翻訳メッセージを検索..." disabled>
+            <span class="search-icon">🔍</span>
+          </div>
+        </div>
+
+        <!-- Dashboard Stats -->
+        <div class="stats-dashboard">
+          <div class="stat-card">
+            <span class="stat-label">総行数</span>
+            <span id="stat-total" class="stat-value">-</span>
+          </div>
+          <div class="stat-card warning">
+            <span class="stat-label">警告・翻訳適用数</span>
+            <span id="stat-warnings" class="stat-value">-</span>
+          </div>
+          <div class="stat-card success">
+            <span class="stat-label">生ログ行数</span>
+            <span id="stat-clean" class="stat-value">-</span>
+          </div>
+        </div>
+
+        <!-- 警告・翻訳適用結果 -->
+        <div class="warnings-results-wrapper hidden" id="warnings-results-wrapper">
+          <h3 class="subsection-title">警告・翻訳適用結果</h3>
+          <div class="warnings-list" id="warnings-list"></div>
+        </div>
+
+        <!-- Timeline Container -->
+        <div class="timeline-container">
+          <!-- Initial Placeholder -->
+          <div id="timeline-placeholder" class="timeline-placeholder">
+            <div class="placeholder-icon">📂</div>
+            <h3>ルールの適用とログの統合</h3>
+            <p>左パネルでルールファイルとログフォルダを選択し、「ログを統合・分析」をクリックしてください。</p>
+          </div>
+
+          <!-- Error Alert -->
+          <div id="error-alert" class="error-alert hidden">
+            <div class="error-header">
+              <span class="error-icon">⚠️</span>
+              <h4>実行エラーが発生しました</h4>
+            </div>
+            <pre id="error-content" class="error-content"></pre>
+          </div>
+
+          <!-- Timeline Output -->
+          <div id="timeline" class="timeline hidden"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Rule Editor Modal -->
+  <div id="rule-modal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modal-title">ルール編集</h3>
+        <button type="button" id="close-modal-btn" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="editor-info">
+          <span class="file-label">編集ファイル:</span>
+          <span id="editor-filename" class="file-value">rules.dsl</span>
+        </div>
+        <!-- Modal Validation Error -->
+        <div id="modal-error-alert" class="error-alert hidden">
+          <div class="error-header">
+            <span class="error-icon">⚠️</span>
+            <h4>構文エラーがあります</h4>
+          </div>
+          <pre id="modal-error-content" class="error-content"></pre>
+        </div>
+        <div class="editor-container">
+          <div class="line-numbers" id="line-numbers">1</div>
+          <textarea id="rules-editor" spellcheck="false" placeholder="# DSLルールを記述してください"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <div id="save-status" class="save-status"></div>
+        <div class="modal-actions">
+          <button type="button" id="cancel-edit-btn" class="btn-secondary">キャンセル</button>
+          <button type="button" id="save-rules-btn" class="btn-primary">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "haskell-log-unifier-ui",
+  "version": "1.0.0",
+  "description": "Web GUI for haskell-log-unifier",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
