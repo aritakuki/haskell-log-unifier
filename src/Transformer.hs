@@ -1,12 +1,21 @@
 module Transformer where
 
 import AST (LogEntry(..))
-import Data.List (sortBy, isInfixOf)
+import Data.List (sortBy, isInfixOf, isPrefixOf)
 import Parser (parseLog)
 import Rule (Rule(..), EventCondition(..))
 import System.Console.ANSI (Color(..), ConsoleLayer(..), ColorIntensity(..), SGR(..), setSGRCode)
 import Text.Regex.TDFA ((=~))
-import Data.Time (diffUTCTime, NominalDiffTime)
+import Data.Time (diffUTCTime, NominalDiffTime, formatTime, defaultTimeLocale)
+import qualified Data.Map as Map
+import qualified Data.Set as Set
+import System.FilePath (takeBaseName)
+
+replaceString :: String -> String -> String -> String
+replaceString _ _ [] = []
+replaceString old new xs@(y:ys)
+  | old `isPrefixOf` xs = new ++ replaceString old new (drop (length old) xs)
+  | otherwise = y : replaceString old new ys
 
 -- ANSIエスケープシーケンス
 gray :: String -> String
@@ -17,9 +26,12 @@ green s = setSGRCode [SetColor Foreground Vivid Green] ++ s ++ setSGRCode [Reset
 
 -- ログエントリを色分けして表示
 displayLogEntry :: LogEntry -> String
-displayLogEntry entry = case transformed entry of
-  Nothing -> gray (raw entry)
-  Just trans -> gray (raw entry) ++ "\n→ " ++ green trans
+displayLogEntry entry =
+  let serviceName = takeBaseName (source entry)
+      prefix = "[" ++ serviceName ++ "] "
+  in case transformed entry of
+       Nothing -> gray (prefix ++ raw entry)
+       Just trans -> gray (prefix ++ raw entry) ++ "\n→ " ++ green trans
 
 -- ======================
 -- ログ変換エンジン
@@ -104,9 +116,15 @@ applyRuleSingleOrCorrelate rule entry past =
     SingleRule _ pat trans ->
       let (_, matched, _, submatches) = raw entry =~ pat :: (String, String, String, [String])
       in if not (null matched)
-         then Just $ entry { transformed = Just (replacePlaceholders trans submatches) }
+         then
+           let withPlaceholders = replacePlaceholders trans submatches
+               withDatetime = case timestamp entry of
+                                Just ts -> replaceString "{datetime}" (formatTime defaultTimeLocale "%Y/%m/%d %H:%M:%S" ts) withPlaceholders
+                                Nothing -> withPlaceholders
+           in Just $ entry { transformed = Just withDatetime }
          else Nothing
     CorrelateRule _ events window ordered trans ->
+      if null events then Nothing else
       case timestamp entry of
         Nothing -> Nothing
         Just ts ->
@@ -116,36 +134,131 @@ applyRuleSingleOrCorrelate rule entry past =
                                            Just t -> diffUTCTime ts t <= limit
                                            Nothing -> False) past
               allInWindow = entry : inWindow
-          in if ordered
-             then
-               -- 順序ありの場合：時系列の古い順に戻して順序判定
-               let oldToNew = reverse allInWindow
-               in if matchOrderedEvents events oldToNew
-                  then Just $ entry { transformed = Just trans }
-                  else Nothing
-             else
-               -- 順序なしの場合：すべてのイベント条件が満たされているか確認
-               if all (\ev -> any (matchEvent ev) allInWindow) events
-               then Just $ entry { transformed = Just trans }
-               else Nothing
+              -- 現在行自体がイベント条件（順序ありなら最後のイベント、順不同ならいずれかのイベント）にマッチしているか
+              isMatchingTrigger = if ordered
+                                  then matchEvent (last events) entry
+                                  else any (\ev -> matchEvent ev entry) events
+          in if not isMatchingTrigger
+             then Nothing
+             else if ordered
+                  then
+                    -- 順序ありの場合：時系列の古い順に戻して順序判定
+                    let oldToNew = reverse allInWindow
+                    in if matchOrderedEvents events oldToNew
+                       then
+                         let formattedTime = formatTime defaultTimeLocale "%Y/%m/%d %H:%M:%S" ts
+                             resolvedTrans = replaceString "{datetime}" formattedTime trans
+                         in Just $ entry { transformed = Just resolvedTrans }
+                       else Nothing
+                  else
+                    -- 順序なしの場合：すべてのイベント条件が満たされているか確認
+                    if all (\ev -> any (matchEvent ev) allInWindow) events
+                    then
+                      let formattedTime = formatTime defaultTimeLocale "%Y/%m/%d %H:%M:%S" ts
+                          resolvedTrans = replaceString "{datetime}" formattedTime trans
+                      in Just $ entry { transformed = Just resolvedTrans }
+                    else Nothing
     ImportRule _ -> Nothing
 
 
 
 -- すべてのルールをログリスト全体に適用する
+-- すべてのルールをログリスト全体に適用する (2パス方式で相関障害の個別アラートを自動抑制)
 applyRules :: [Rule] -> [LogEntry] -> [LogEntry]
-applyRules rules entries = map applyRulesForEntry (zipWithPast entries)
+applyRules rules entries =
+  let indexedEntries = zip [0..] entries
+      -- 1パス目: 相関ルールの判定と適合したグループのインデックス抽出
+      (corrWarnings, suppressedIndices) = evaluateCorrelations rules indexedEntries
+      -- 2パス目: 単一ルールの適用（相関で吸収された行はスキップ）
+      applied = map (applySingleRules corrWarnings suppressedIndices) indexedEntries
+  in applied
   where
-    applyRulesForEntry (entry, past) = applyRulesList rules entry past
-
-    applyRulesList [] entry _ = entry
-    applyRulesList (rule:rest) entry past =
+    singleRules = [ r | r@SingleRule {} <- rules ]
+    
+    applySingleRules corrWarnings suppressedIndices (i, entry)
+      -- 相関ルールのトリガー行の場合、その警告メッセージを適用
+      | Map.member i corrWarnings =
+          entry { transformed = Map.lookup i corrWarnings }
+      -- 相関ルールの構成要素となった過去のエラー行の場合、個別ルール適用をスキップして生ログのまま残す
+      | Set.member i suppressedIndices =
+          entry
+      -- 通常のログ行の場合、単一ルールを通常通り適用
+      | otherwise =
+          applySingleRulesList singleRules entry
+          
+    applySingleRulesList [] entry = entry
+    applySingleRulesList (rule:rest) entry =
       case transformed entry of
-        Just _ -> entry -- すでに前のルールで変換されている場合は何もしない
+        Just _ -> entry
         Nothing ->
-          case applyRuleSingleOrCorrelate rule entry past of
+          case applyRuleSingleOrCorrelate rule entry [] of
             Just transformedEntry -> transformedEntry
-            Nothing -> applyRulesList rest entry past
+            Nothing -> applySingleRulesList rest entry
+
+-- 相関に該当したインデックスを収集するヘルパー
+evaluateCorrelations :: [Rule] -> [(Int, LogEntry)] -> (Map.Map Int String, Set.Set Int)
+evaluateCorrelations rules indexedEntries =
+  foldl processEntry (Map.empty, Set.empty) (zipWithPast indexedEntries)
+  where
+    processEntry acc (entry, past) =
+      foldl (applyCorrRule entry past) acc rules
+      
+    applyCorrRule (i, entry) past (currMap, currSet) rule =
+      case rule of
+        CorrelateRule _ events window ordered trans ->
+          if null events then (currMap, currSet)
+          else case timestamp entry of
+            Nothing -> (currMap, currSet)
+            Just ts ->
+              let limit = fromInteger window :: NominalDiffTime
+                  inWindow = takeWhile (\(_, e) -> case timestamp e of
+                                               Just t -> diffUTCTime ts t <= limit
+                                               Nothing -> False) past
+                  allInWindow = (i, entry) : inWindow
+                  isMatchingTrigger = if ordered
+                                      then matchEvent (last events) entry
+                                      else any (\ev -> matchEvent ev entry) events
+              in if not isMatchingTrigger
+                 then (currMap, currSet)
+                 else if ordered
+                      then
+                        let oldToNew = reverse allInWindow
+                        in if matchOrderedEvents events (map snd oldToNew)
+                           then
+                             let matchedGroup = findOrderedMatches events oldToNew
+                                 matchedIndices = map fst matchedGroup
+                                 formattedTime = formatTime defaultTimeLocale "%Y/%m/%d %H:%M:%S" ts
+                                 resolvedTrans = replaceString "{datetime}" formattedTime trans
+                                 newMap = Map.insert i resolvedTrans currMap
+                                 newSet = foldr Set.insert currSet (filter (/= i) matchedIndices)
+                             in (newMap, newSet)
+                           else (currMap, currSet)
+                      else
+                        if all (\ev -> any (matchEvent ev) (map snd allInWindow)) events
+                        then
+                          let matchedGroup = findUnorderedMatches events allInWindow
+                              matchedIndices = map fst matchedGroup
+                              formattedTime = formatTime defaultTimeLocale "%Y/%m/%d %H:%M:%S" ts
+                              resolvedTrans = replaceString "{datetime}" formattedTime trans
+                              newMap = Map.insert i resolvedTrans currMap
+                              newSet = foldr Set.insert currSet (filter (/= i) matchedIndices)
+                          in (newMap, newSet)
+                        else (currMap, currSet)
+        _ -> (currMap, currSet)
+
+-- 順序あり相関の構成ログ抽出
+findOrderedMatches :: [EventCondition] -> [(Int, LogEntry)] -> [(Int, LogEntry)]
+findOrderedMatches [] _ = []
+findOrderedMatches _ [] = []
+findOrderedMatches (ev:evs) (x:xs) =
+  if matchEvent ev (snd x)
+    then x : findOrderedMatches evs xs
+    else findOrderedMatches (ev:evs) xs
+
+-- 順不同相関の構成ログ抽出
+findUnorderedMatches :: [EventCondition] -> [(Int, LogEntry)] -> [(Int, LogEntry)]
+findUnorderedMatches evs window =
+  [ x | ev <- evs, let matches = filter (\w -> matchEvent ev (snd w)) window, not (null matches), let x = head matches ]
 
 
 
