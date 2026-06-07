@@ -4,6 +4,7 @@ import Data.Void (Void)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
+import Data.List (isPrefixOf)
 
 -- ======================
 -- 変換ルールDSL
@@ -41,18 +42,19 @@ lexeme :: RuleParser a -> RuleParser a
 lexeme = L.lexeme sc
 
 symbol :: String -> RuleParser String
-symbol = L.symbol sc
+symbol sym = label ("'" ++ sym ++ "'") $ L.symbol sc sym
 
 -- 引用符で囲まれた文字列
 quotedString :: RuleParser String
-quotedString = char '"' *> many (noneOf "\"") <* char '"'
+quotedString = label "ダブルクォーテーションで囲まれた文字列（例: \"auth_error\" や \"502\"）" $
+  char '"' *> many (noneOf "\"") <* char '"'
 
 -- ルール定義パーサー
 parseRule :: RuleParser Rule
 parseRule = parseSingleRule <|> parseCorrelateRule
 
 parseSingleRule :: RuleParser Rule
-parseSingleRule = do
+parseSingleRule = label "単一ルール定義 (rule \"...\")" $ do
   _ <- symbol "rule"
   name <- lexeme quotedString
   _ <- symbol "{"
@@ -67,7 +69,7 @@ parseSingleRule = do
   return $ SingleRule name pattern transform
 
 parseCorrelateRule :: RuleParser Rule
-parseCorrelateRule = do
+parseCorrelateRule = label "相関ルール定義 (correlate \"...\")" $ do
   _ <- symbol "correlate"
   name <- lexeme quotedString
   _ <- symbol "{"
@@ -86,7 +88,7 @@ parseCorrelateRule = do
   return $ CorrelateRule name events windowVal transform
 
 parseEventCondition :: RuleParser EventCondition
-parseEventCondition = do
+parseEventCondition = label "イベント条件 (event { ... })" $ do
   _ <- symbol "event"
   _ <- symbol "{"
   _ <- symbol "source:"
@@ -100,6 +102,28 @@ parseEventCondition = do
 parseRules :: String -> Either String [Rule]
 parseRules input = case parse (sc *> many parseRule <* eof) "" input of
   Right rules -> Right rules
-  Left err -> Left $ "Parse error: " ++ show err
+  Left err -> Left $ "\nルールファイルの解析に失敗しました。以下の記述を確認してください：\n\n" 
+                   ++ translateMegaparsecError (errorBundlePretty err)
+
+-- エラーメッセージの簡易日本語化
+translateMegaparsecError :: String -> String
+translateMegaparsecError msg = unlines $ map translateLine (lines msg)
+  where
+    translateLine line
+      | "unexpected end of input" `isPrefixOf` lTrim =
+          indent ++ "想定外の入力: ファイルの末尾で予期せず入力が途切れています（中括弧 } や閉じブラケット ] の閉じ忘れはありませんか？）"
+      | "unexpected" `isPrefixOf` lTrim =
+          indent ++ "想定外の入力: " ++ translateTerms (drop 10 lTrim)
+      | "expecting" `isPrefixOf` lTrim =
+          indent ++ "期待されていた入力: " ++ translateTerms (drop 9 lTrim)
+      | otherwise = line
+      where
+        lTrim = dropWhile (== ' ') line
+        indent = takeWhile (== ' ') line
+
+    translateTerms term
+      | "end of input" `isPrefixOf` term = "ファイルの末尾"
+      | otherwise = term
+
 
 
