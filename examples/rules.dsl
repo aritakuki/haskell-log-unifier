@@ -1,3 +1,4 @@
+# 認証エラーを検知するルール
 rule "auth_error" {
   pattern: "BAD"
   transform: {
@@ -5,6 +6,7 @@ rule "auth_error" {
   }
 }
 
+# データベース接続やクエリのエラーを検知するルール
 rule "db_error" {
   pattern: "ERROR: database"
   transform: {
@@ -12,6 +14,7 @@ rule "db_error" {
   }
 }
 
+# API接続のタイムアウトを検知するルール
 rule "api_timeout" {
   pattern: "timeout"
   transform: {
@@ -19,9 +22,11 @@ rule "api_timeout" {
   }
 }
 
+# 高レイテンシー（応答遅延）を検知するルール
 rule "high_latency" {
   pattern: "latency"
   transform: {
     message: "HIGH LATENCY WARNING"
   }
 }
+
