@@ -77,11 +77,12 @@ applyRules :: [Rule] -> LogEntry -> LogEntry
 applyRules rules entry = case rules of
   [] -> entry
   (rule:rest) ->
-    let (before, matched, after, submatches) = raw entry =~ rulePattern rule :: (String, String, String, [String])
+    let (_, matched, _, submatches) = raw entry =~ rulePattern rule :: (String, String, String, [String])
     in if not (null matched)
        then
          let transformedMsg = replacePlaceholders (ruleTransform rule) submatches
          in entry { transformed = Just transformedMsg }
        else
          applyRules rest entry
+
 
