@@ -63,14 +63,16 @@ rule "user_auth_error" {
 ### 5. 複数サービスにまたがる時系列相関（correlate ルール）
 
 - 複数の異なるサービスログから、一定時間（タイムウィンドウ）内に特定のイベントがすべて発生したことを検知
+- **順序保証 (`ordered: true/false`)**: イベントが指定した並び順（時系列）通りに発生した時のみ検知するか、順不同で検知するかを選択可能
 - 条件がすべて満たされたとき、一連の障害イベントを完成させるトリガーとなった「最後のログエントリー」の直下に、警告メッセージを付与
 
-**例 (相関ルール):**
+**例 (相関ルール - 順序あり):**
 ルール:
 ```haskell
 # 複数サービスにまたがる連鎖障害を検知する
 correlate "cascade_failure" {
   window: 30 # 30秒以内
+  ordered: true # eventsの定義順にログが発生した時のみマッチ
   events: [
     event { source: "apache" pattern: "Connection Refused" }
     event { source: "nginx" pattern: "502" }
@@ -95,7 +97,22 @@ correlate "cascade_failure" {
 → 【警告】Apache、Nginx、myapp1 にまたがる連鎖的なシステム障害が発生しています！
 ```
 
-### 6. 親切な日本語構文チェックエラー表示
+### 6. ルールファイルの分割とインポート（import 構文）
+
+- ルール数が増加した際に、ファイルをカテゴリやコンポーネント別に分割して整理可能
+- `import "相対パス.dsl"` を用いて、別ファイルで定義したルール群を展開・統合します。
+- インポートの循環参照（無限ループ）の自動防止や、インポート先ファイルが見つからない場合の親切な日本語エラー出力を装備
+
+**例:**
+メインファイル (`main_rules.dsl`):
+```haskell
+import "imported_auth.dsl"
+import "imported_db.dsl"
+
+rule "api_timeout" { ... }
+```
+
+### 7. 親切な日本語構文チェックエラー表示
 
 - ツール実行時にDSLルールファイルをパースしてチェック
 - 構文エラーがあった場合は、エラー箇所を行番号、および矢印（`^`）で視覚的に明示し、日本語のエラーメッセージとヒントを出力
@@ -143,6 +160,21 @@ correlate "cascade_failure" {
    2026/05/30 13:43 BAD Alice Error (灰色)
    → ユーザー Alice の認証エラーが発生しました (緑色)
    ```
+
+### Tips: 推奨対応（アクション）の記述
+ログから障害原因だけでなく、次の復旧アクションを提示したい場合は、`message` フィールドの中に改行（インデント）を挟んで記述することで、シンプルかつ綺麗に対応手順を伝えることができます。
+
+**DSL記述例:**
+```haskell
+rule "db_timeout" {
+  pattern: "connection timeout"
+  transform: {
+    message: "DB接続タイムアウト\n  → 推奨対応: DBサーバのプロセス数および接続数を確認してください"
+  }
+}
+```
+
+---
 
 ## Haskell + megaparsec + regex-tdfa の強み
 
