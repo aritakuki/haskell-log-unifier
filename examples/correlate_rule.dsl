@@ -6,8 +6,10 @@ correlate "cascade_failure" {
     event { source: "nginx" pattern: "502" }
     event { source: "myapp1" pattern: "Database connection failed" }
   ]
-  transform: {
+  transform; {
     message: "【警告】Apache、Nginx、myapp1 にまたがる連鎖的なシステム障害が発生しています！"
   }
 }
+
+
 

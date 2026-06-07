@@ -111,6 +111,8 @@ applyRuleSingleOrCorrelate rule entry past =
           in if all (\ev -> any (matchEvent ev) allInWindow) events
              then Just $ entry { transformed = Just trans }
              else Nothing
+    ImportRule _ -> Nothing
+
 
 -- すべてのルールをログリスト全体に適用する
 applyRules :: [Rule] -> [LogEntry] -> [LogEntry]

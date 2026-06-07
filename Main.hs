@@ -1,17 +1,45 @@
 module Main where
 
 import Transformer (transformLogs, filterSuccessful, displayLogEntry, applyRules, sortLogEntries)
-import Rule (parseRules)
+import Rule (parseRules, Rule(..))
 import AST (LogEntry(..))
 import System.Environment (getArgs)
 import System.Directory (doesDirectoryExist, listDirectory)
 import Data.List (isSuffixOf, isPrefixOf)
 import Data.List.Split (splitOn)
 import Data.Time (parseTimeM, defaultTimeLocale, UTCTime)
+import System.FilePath (takeDirectory, (</>))
+import qualified Data.Set as Set
+import Control.Exception (try, IOException)
 
 -- ======================
 -- メインプログラム
 -- ======================
+
+-- 再帰的にルールファイルをロードし、インポートを展開する
+loadRulesRecursively :: Set.Set FilePath -> FilePath -> IO (Either String [Rule])
+loadRulesRecursively visited path = do
+  if Set.member path visited
+    then return $ Right [] -- 無限ループ防止
+    else do
+      eitherContent <- try (readFile path) :: IO (Either IOException String)
+      case eitherContent of
+        Left _ -> return $ Left $ "ルールファイルが見つかりません: " ++ path
+        Right content -> do
+          case parseRules content of
+            Left err -> return $ Left $ "Error in " ++ path ++ ": " ++ err
+            Right rawRules -> do
+              let dir = takeDirectory path
+                  newVisited = Set.insert path visited
+              resolved <- mapM (resolveRule newVisited dir) rawRules
+              return $ fmap concat (sequence resolved)
+
+
+resolveRule :: Set.Set FilePath -> FilePath -> Rule -> IO (Either String [Rule])
+resolveRule visited dir (ImportRule relPath) = do
+  let fullPath = dir </> relPath
+  loadRulesRecursively visited fullPath
+resolveRule _ _ rule = return $ Right [rule]
 
 -- 時間範囲をパース
 parseTimeRange :: String -> Maybe (UTCTime, UTCTime)
@@ -38,8 +66,8 @@ main = do
   args <- getArgs
   case args of
     ["--rules", rulesFile, "--logs", logsPath] -> do
-      rulesContent <- readFile rulesFile
-      case parseRules rulesContent of
+      rulesResult <- loadRulesRecursively Set.empty rulesFile
+      case rulesResult of
         Left err -> putStrLn $ "Error parsing rules: " ++ err
         Right rules -> do
           isDir <- doesDirectoryExist logsPath
@@ -65,8 +93,8 @@ main = do
               let withRules = applyRules rules sorted
               mapM_ (putStrLn . displayLogEntry) withRules
     ["--rules", rulesFile, "--services", services, "--time", timeRange, "--logs", logsPath] -> do
-      rulesContent <- readFile rulesFile
-      case parseRules rulesContent of
+      rulesResult <- loadRulesRecursively Set.empty rulesFile
+      case rulesResult of
         Left err -> putStrLn $ "Error parsing rules: " ++ err
         Right rules -> do
           case parseTimeRange timeRange of
@@ -100,4 +128,5 @@ main = do
     _ -> do
       putStrLn "Usage: log-unifier --rules <rules.dsl> --logs <logs.txt or logs directory>"
       putStrLn "       log-unifier --rules <rules.dsl> --services nginx,apache --time \"2026/05/30 13:00-14:00\" --logs ./logs"
+
 

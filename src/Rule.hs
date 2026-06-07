@@ -31,7 +31,11 @@ data Rule
       , corrWindow :: Integer
       , ruleTransform :: String
       }
+  | ImportRule
+      { importPath :: FilePath
+      }
   deriving (Show, Eq)
+
 
 -- 空白と1行コメント（#）を読み飛ばすスペースコンシューマ
 sc :: RuleParser ()
@@ -51,7 +55,14 @@ quotedString = label "ダブルクォーテーションで囲まれた文字列�
 
 -- ルール定義パーサー
 parseRule :: RuleParser Rule
-parseRule = parseSingleRule <|> parseCorrelateRule
+parseRule = parseSingleRule <|> parseCorrelateRule <|> parseImportRule
+
+parseImportRule :: RuleParser Rule
+parseImportRule = label "インポート宣言 (import \"...\")" $ do
+  _ <- symbol "import"
+  path <- lexeme quotedString
+  return $ ImportRule path
+
 
 parseSingleRule :: RuleParser Rule
 parseSingleRule = label "単一ルール定義 (rule \"...\")" $ do
