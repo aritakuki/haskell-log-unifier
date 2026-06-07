@@ -12,7 +12,7 @@
 
 1. **障害発生:** システムで障害が発生
 2. **ログ調査:** 複数サービスのログを統合して時系列で確認
-3. **ノウハウ蓄積:** 調査結果をDSLルールとして保存
+3. **ノウハウ蓄積:** 調査結果をDSLルール（正規表現や複数サービスの相関判定）として保存
 4. **次回活用:** 次回以降、ルールが自動適用されて調査が容易になる
 
 ## 機能
@@ -31,90 +31,131 @@
 ### 3. ログ統合・時系列表示
 
 - 複数サービスのログを時系列で並べて表示
-- 統一フォーマットへの変換は不要
+- 統一フォーマットへの変換は不要で、元のファイル名（発生源）を保持したままマージ
 
-### 4. DSLルールによる翻訳
+### 4. DSLルールによる翻訳と動的変数抽出（正規表現対応）
 
 - ルールが適用されたログは翻訳されて表示
+- 正規表現（Regex）によるパターンマッチと、キャプチャグループ（`$1`〜`$9`）を用いた動的な変数抽出に対応
 - ルール範囲外のログは生データのみ表示
 
-**例:**
-```
-2026/05/30 13:43 BAD ALICE FAILURE (灰色)
-→ AUTH ERROR (緑色)
-```
-
-### 5. DSLルールの追加
-
-- 障害対応時にDSLルールを追加
-- 型安全でエラーうるさい（megaparsecによる詳細なエラーメッセージ）
-
-**DSLルール例:**
+**例 (動的変数抽出):**
+ルール:
 ```haskell
-rule "auth_error" {
-  pattern: "BAD USERNAME FAILURE"
+# ユーザーごとの認証エラーを検知し、ユーザー名を動的に抽出する
+rule "user_auth_error" {
+  pattern: "BAD ([a-zA-Z]+) Error"
   transform: {
-    message: "AUTH ERROR"
+    message: "ユーザー $1 の認証エラーが発生しました"
   }
 }
 ```
-
-### 6. 型チェック
-
-- ツール実行時にDSLルールファイルをパースして型チェック
-- 型エラーがあれば詳細なエラーメッセージが表示される
-
-**型エラー例:**
+入力ログ:
+```text
+2026/05/30 13:43 BAD Alice Error
 ```
-Error at line 3, column 10:
-  Expected HttpMethod but found String
-  method: "INVALID"  -- "INVALID"はHttpMethod型ではない
+出力:
+```text
+2026/05/30 13:43 BAD Alice Error (灰色)
+→ ユーザー Alice の認証エラーが発生しました (緑色)
+```
+
+### 5. 複数サービスにまたがる時系列相関（correlate ルール）
+
+- 複数の異なるサービスログから、一定時間（タイムウィンドウ）内に特定のイベントがすべて発生したことを検知
+- 条件がすべて満たされたとき、一連の障害イベントを完成させるトリガーとなった「最後のログエントリー」の直下に、警告メッセージを付与
+
+**例 (相関ルール):**
+ルール:
+```haskell
+# 複数サービスにまたがる連鎖障害を検知する
+correlate "cascade_failure" {
+  window: 30 # 30秒以内
+  events: [
+    event { source: "apache" pattern: "Connection Refused" }
+    event { source: "nginx" pattern: "502" }
+    event { source: "myapp1" pattern: "Database connection failed" }
+  ]
+  transform: {
+    message: "【警告】Apache、Nginx、myapp1 にまたがる連鎖的なシステム障害が発生しています！"
+  }
+}
+```
+入力ログ（3ファイルが時系列マージされたもの）:
+```text
+[31/May/2024:10:00:00] ERROR: Apache Connection Refused
+[31/May/2024:10:00:05] ERROR: Nginx 502 Bad Gateway
+[31/May/2024:10:00:10] ERROR: myapp1 Database connection failed
+```
+出力:
+```text
+[31/May/2024:10:00:00] ERROR: Apache Connection Refused
+[31/May/2024:10:00:05] ERROR: Nginx 502 Bad Gateway
+[31/May/2024:10:00:10] ERROR: myapp1 Database connection failed
+→ 【警告】Apache、Nginx、myapp1 にまたがる連鎖的なシステム障害が発生しています！
+```
+
+### 6. 親切な日本語構文チェックエラー表示
+
+- ツール実行時にDSLルールファイルをパースしてチェック
+- 構文エラーがあった場合は、エラー箇所を行番号、および矢印（`^`）で視覚的に明示し、日本語のエラーメッセージとヒントを出力
+
+**エラー出力例:**
+```text
+ルールファイルの解析に失敗しました。以下の記述を確認してください：
+
+5:29:
+  |
+5 |     event { source: "apache", pattern: "Connection Refused" }
+  |                             ^^^^^^^^
+想定外の入力:  ", patter"
+期待されていた入力:  'pattern:'
 ```
 
 ## 障害対応のフロー
 
 1. **障害発生:**
-   ```
-   2026/05/30 13:43 BAD ALICE FAILURE
+   ```text
+   2026/05/30 13:43 BAD Alice Error
    ```
 
 2. **ログ調査:**
    - 生ログを確認
-   - 原因を特定（認証エラー）
+   - 原因を特定（ユーザーAliceの認証エラー）
 
 3. **ノウハウをDSLルールに追記:**
    ```haskell
-   rule "auth_error" {
-     pattern: "BAD USERNAME FAILURE"
+   rule "user_auth_error" {
+     pattern: "BAD ([a-zA-Z]+) Error"
      transform: {
-       message: "AUTH ERROR"
+       message: "ユーザー $1 の認証エラーが発生しました"
      }
    }
    ```
 
-4. **ツールを実行してエラー確認:**
+4. **ツールを実行して確認:**
    ```bash
    ./log-unifier --rules rules.dsl --logs ./logs
    ```
 
 5. **次回以降、ルールが自動適用:**
-   ```
-   2026/05/30 13:43 BAD ALICE FAILURE (灰色)
-   → AUTH ERROR (緑色)
+   ```text
+   2026/05/30 13:43 BAD Alice Error (灰色)
+   → ユーザー Alice の認証エラーが発生しました (緑色)
    ```
 
-## Haskell + megaparsecの強み
+## Haskell + megaparsec + regex-tdfa の強み
 
 1. **DSLでルール定義:** 人に対して超親切
-2. **型安全:** ルールミスを防ぐ
-3. **詳細なエラーメッセージ:** 障害対応時に役立つ
+2. **型安全＆厳密な構文チェック:** ルール記述ミスをビジュアルな日本語エラーで即座に指摘
+3. **強力な正規表現:** `regex-tdfa` による高速かつ高度なパターンマッチングと動的変数抽出
 4. **軽量:** 非常駐アプリに適している
 
 ## 実行環境
 
 - 実行環境にghcは不要
 - コンパイル済みの実行ファイル（log-unifier）のみで動作
-- 実行ファイルがDSLルールファイルをパースして型チェック
+- 実行ファイルがDSLルールファイルをパースしてチェック
 
 ## ターゲットユーザー
 
@@ -124,4 +165,4 @@ Error at line 3, column 10:
 ## 既存ツールとの違い
 
 - **ELK/Splunk:** 常駐アプリ、リアルタイム監視
-- **このツール:** 非常駐アプリ、障害対応時の調査
+- **このツール:** 非常駐アプリ、障害対応時のアドホックな調査とノウハウの実行可能ドキュメント化
