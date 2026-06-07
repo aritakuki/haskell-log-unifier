@@ -1,10 +1,11 @@
 module Transformer where
 
 import AST (LogEntry(..))
-import Data.List (sortBy, isInfixOf)
+import Data.List (sortBy)
 import Parser (parseLog)
 import Rule (Rule(..))
 import System.Console.ANSI (Color(..), ConsoleLayer(..), ColorIntensity(..), SGR(..), setSGRCode)
+import Text.Regex.TDFA ((=~))
 
 -- ANSIエスケープシーケンス
 gray :: String -> String
@@ -58,17 +59,29 @@ sortLogEntries entries =
       (Nothing, Just _) -> GT
       (Nothing, Nothing) -> EQ)
 
--- ルールを適用
-applyRule :: Rule -> LogEntry -> LogEntry
-applyRule rule entry = entry { transformed = Just (ruleTransform rule) }
+-- $1, $2 などのプレースホルダーを正規表現のキャプチャグループで置換する
+replacePlaceholders :: String -> [String] -> String
+replacePlaceholders [] _ = []
+replacePlaceholders ('$':d:xs) submatches
+  | d >= '1' && d <= '9' =
+      let idx = read [d] - 1
+      in if idx < length submatches
+         -- 置換対象を埋め込んで再帰
+         then (submatches !! idx) ++ replacePlaceholders xs submatches
+         -- 範囲外ならそのまま文字として出力
+         else '$' : d : replacePlaceholders xs submatches
+replacePlaceholders (x:xs) submatches = x : replacePlaceholders xs submatches
 
--- ルールを適用（パターンマッチ）
+-- ルールを適用（パターンマッチ・正規表現対応）
 applyRules :: [Rule] -> LogEntry -> LogEntry
 applyRules rules entry = case rules of
   [] -> entry
-  (rule:rest) -> 
-    if raw entry `contains` rulePattern rule
-    then applyRule rule entry
-    else applyRules rest entry
-  where
-    contains haystack needle = needle `isInfixOf` haystack
+  (rule:rest) ->
+    let (before, matched, after, submatches) = raw entry =~ rulePattern rule :: (String, String, String, [String])
+    in if not (null matched)
+       then
+         let transformedMsg = replacePlaceholders (ruleTransform rule) submatches
+         in entry { transformed = Just transformedMsg }
+       else
+         applyRules rest entry
+
